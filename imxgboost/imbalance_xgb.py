@@ -1,9 +1,11 @@
+from random import sample
 import numpy as np
 import xgboost as xgb
 from imxgboost.weighted_loss import Weight_Binary_Cross_Entropy
 from imxgboost.focal_loss import Focal_Binary_Loss
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef
+from sklearn.model_selection import train_test_split
 
 
 def evalerror(preds, dtrain):
@@ -35,8 +37,10 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
        This wrapper would provide a Xgboost interface with sklearn estimiator structure, which could be stacked in other Sk pipelines
     """
 
-    def __init__(self, num_round=10, max_depth=10, eta=0.3, verbosity=1, objective_func='binary:logitraw',
-                 eval_metric='logloss', booster='gbtree', special_objective=None, early_stopping_rounds=None, imbalance_alpha=None,
+    def __init__(self, para_dict={'eval_metric':["logloss","auc"],
+                'max_depth': 3,
+                'eta': 0.05,
+                }, num_round=500,special_objective=None, early_stopping_rounds=None, imbalance_alpha=None,
                  focal_gamma=None):
         """
         Parameters to initialize a Xgboost estimator
@@ -51,60 +55,47 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
         :param imbalance_alpha. The \alpha value for imbalanced loss. Will make impact on '1' classes. Must have when special_objective 'weighted'
         :param focal_gamma. The \gamma value for focal loss. Must have when special_objective 'focal'
         """
-        self.num_round = num_round
-        self.max_depth = max_depth
-        self.eta = eta
-        self.verbosity = verbosity
-        self.objective_func = objective_func
-        self.eval_metric = eval_metric
-        self.booster = booster
+        self.para_dict = para_dict
         self.eval_list = []
         self.boosting_model = 0
         self.special_objective = special_objective
         self.early_stopping_rounds = early_stopping_rounds
         self.imbalance_alpha = imbalance_alpha
         self.focal_gamma = focal_gamma
-
-    def fit(self, data_x, data_y):
+        self.evals_result={}
+        self.num_round= num_round
+    def fit(self, data_x, data_y, sample_weight=None):
         if self.special_objective is None:
             # get the parameter list
-            self.para_dict = {'max_depth': self.max_depth,
-                              'eta': self.eta,
-                              'verbosity': self.verbosity,
-                              'objective': self.objective_func,
-                              'eval_metric': self.eval_metric,
-                              'booster': self.booster}
-        else:
-            # get the parameter list, without stating the objective function
-            self.para_dict = {'max_depth': self.max_depth,
-                              'eta': self.eta,
-                              'verbosity': self.verbosity,
-                              'eval_metric': self.eval_metric,
-                              'booster': self.booster}
+            self.para_dict['objective'] = self.objective_func
+        # else:
+        #     # get the parameter list, without stating the objective function
+        #     self.para_dict = {'max_depth': self.max_depth,
+        #                       'eta': self.eta,
+        #                       'verbosity': self.verbosity,
+        #                       'eval_metric': self.eval_metric,
+        #                       'booster': self.booster}
         # make sure data is in [nData * nSample] format
-        assert len(data_x.shape) == 2
+        # assert len(data_x.shape) == 2
         # check if data length is the same
-        if data_x.shape[0] != data_y.shape[0]:
-            raise ValueError('The numbner of instances for x and y data should be the same!')
+        # if data_x.shape[0] != data_y.shape[0]:
+        #     raise ValueError('The numbner of instances for x and y data should be the same!')
         # data_x is in [nData*nDim]
-        nData = data_x.shape[0]
-        nDim = data_x.shape[1]
         # split the data into train and validation
-        holistic_ind = np.random.permutation(nData)
-        train_ind = holistic_ind[0:nData * 3 // 4]
-        valid_ind = holistic_ind[nData * 3 // 4:nData]
         # indexing and get the data
-        train_data = data_x[train_ind]
-        train_label = data_y[train_ind]
-        valid_data = data_x[valid_ind]
-        valid_label = data_y[valid_ind]
+        
+        ### Improving train/test splitting
+        X_train, X_test, y_train, y_test, w_train, w_test = train_test_split(data_x, data_y, sample_weight, test_size=0.5, random_state=42)
         # marixilize the data and train the estimator
-        dtrain = xgb.DMatrix(train_data, label=train_label)
-        dvalid = xgb.DMatrix(valid_data, label=valid_label)
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        dvalid = xgb.DMatrix(X_test, label=y_test)
+        dtrain = xgb.DMatrix(X_train, label=y_train,weight=np.abs(w_train))
+        dvalid = xgb.DMatrix(X_test, label=y_test,weight=np.abs(w_test))
         self.eval_list = [(dvalid, 'valid'), (dtrain, 'train')]
+        # print(self.eval_list)
         if self.special_objective is None:
             # fit the classfifier
-            self.boosting_model = xgb.train(self.para_dict, dtrain, self.num_round, self.eval_list, verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds)
+            self.boosting_model = xgb.train(self.para_dict,  dtrain,self.num_round, self.eval_list, verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds)
         elif self.special_objective == 'weighted':
             # if the alpha value is None then raise an error
             if self.imbalance_alpha is None:
@@ -112,7 +103,7 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
             # construct the object with imbalanced alpha value
             weighted_loss_obj = Weight_Binary_Cross_Entropy(imbalance_alpha=self.imbalance_alpha)
             # fit the classfifier
-            self.boosting_model = xgb.train(self.para_dict, dtrain, self.num_round, self.eval_list,
+            self.boosting_model = xgb.train(self.para_dict, dtrain,  self.num_round,self.eval_list,
                                             obj=weighted_loss_obj.weighted_binary_cross_entropy, feval=evalerror,
                                             verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds)
         elif self.special_objective == 'focal':
@@ -122,76 +113,77 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
             # construct the object with focal gamma value
             focal_loss_obj = Focal_Binary_Loss(gamma_indct=self.focal_gamma)
             # fit the classfifier
-            self.boosting_model = xgb.train(self.para_dict, dtrain, self.num_round, self.eval_list,
+            # print(self.para_dict)
+            self.boosting_model = xgb.train(self.para_dict, dtrain, self.num_round,self.eval_list,
                                             obj=focal_loss_obj.focal_binary_object, feval=evalerror, verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds)
         else:
             raise ValueError(
                 'The input special objective mode not recognized! Could only be \'weighted\' or \'focal\', but got ' + str(
                     self.special_objective))
 
-    def predict(self, data_x, y=None):
+    def predict(self, data_x, y=None, sample_weight=None):
         # matrixilize
         if y is not None:
             try:
-                dtest = xgb.DMatrix(data_x, label=y)
+                dtest = xgb.DMatrix(data_x, label=y,weight=sample_weight)
             except:
                 raise ValueError('Test data invalid!')
         else:
-            dtest = xgb.DMatrix(data_x)
+            dtest = xgb.DMatrix(data_x,weight=sample_weight)
 
         prediction_output = self.boosting_model.predict(dtest)
 
         return prediction_output
 
-    def predict_sigmoid(self, data_x, y=None):
+    def predict_sigmoid(self, data_x, y=None,sample_weight=None):
         # sigmoid output, for the prob = 1
 
-        raw_output = self.predict(data_x, y)
+        raw_output = self.predict(data_x, y,weight=sample_weight)
         sigmoid_output = 1. / (1. + np.exp(-raw_output))
 
         return sigmoid_output
 
-    def predict_determine(self, data_x, y=None):
+    def predict_determine(self, data_x, y=None,sample_weight=None):
         # deterministic output
-        sigmoid_output = self.predict_sigmoid(data_x, y)
+        sigmoid_output = self.predict_sigmoid(data_x, y,weight=sample_weight)
         prediction_output = np.round(sigmoid_output)
 
         return prediction_output
 
-    def predict_two_class(self, data_x, y=None):
+    def predict_two_class(self, data_x, y=None,sample_weight=None):
         # predict the probability of two classes
-        prediction_output = two_class_encoding(self.predict(data_x, y))
+        prediction_output = two_class_encoding(self.predict(data_x, y,weight=sample_weight))
 
         return prediction_output
 
     def score(self, X, y, sample_weight=None):
         label_pred = self.predict_determine(data_x=X)
-        score_pred = accuracy_score(y_true=y, y_pred=label_pred)
+        score_pred = accuracy_score(y_true=y, y_pred=label_pred,weight=sample_weight)
 
         return score_pred
 
-    def score_eval_func(self, y_true, y_pred, mode='accuracy'):
+    def score_eval_func(self, y_true, y_pred, mode='accuracy',sample_weight=None):
         prob_pred = two_class_encoding(y_pred)
         label_pred = np.argmax(prob_pred, axis=1)
         if mode == 'accuracy':
-            score_pred = accuracy_score(y_true=y_true, y_pred=label_pred)
+            score_pred = accuracy_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
         elif mode == 'precision':
-            score_pred = precision_score(y_true=y_true, y_pred=label_pred)
+            score_pred = precision_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
         elif mode == 'recall':
-            score_pred = recall_score(y_true=y_true, y_pred=label_pred)
+            score_pred = recall_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
         elif mode == 'f1':
-            score_pred = f1_score(y_true=y_true, y_pred=label_pred)
+            score_pred = f1_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
         elif mode == 'MCC':
-            score_pred = matthews_corrcoef(y_true=y_true, y_pred=label_pred)
+            score_pred = matthews_corrcoef(y_true=y_true, y_pred=label_pred,weight=sample_weight)
         else:
             raise ValueError('Score function mode unrecognized! Must from one in the list '
                              '[\'accuracy\', \'precision\',\'recall\',\'f1\',\'MCC\']')
 
         return score_pred
 
-    def correct_eval_func(self, y_true, y_pred, mode='TP'):
+    def correct_eval_func(self, y_true, y_pred, mode='TP',sample_weight=None):
         # get the predictions first
-        prob_pred = two_class_encoding(y_pred)
+        prob_pred = two_class_encoding(y_pred,sample_weight)
         label_pred = np.argmax(prob_pred, axis=1)
         # logic-not for the tn predictions
         y_true_negative = np.logical_not(y_true)
@@ -208,3 +200,5 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
         else:
             raise ValueError('Corrective evaluation mode not recognized! '
                              'Must be one of \'TP\', \'TN\', \'FP\', or \'FN\'')
+    
+   
