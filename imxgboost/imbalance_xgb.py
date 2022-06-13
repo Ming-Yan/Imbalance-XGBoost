@@ -95,7 +95,7 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
         # print(self.eval_list)
         if self.special_objective is None:
             # fit the classfifier
-            self.boosting_model = xgb.train(self.para_dict,  dtrain,self.num_round, self.eval_list, verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds)
+            self.boosting_model = xgb.train(self.para_dict,  dtrain,self.num_round, self.eval_list, verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds,evals_result=self.evals_result)
         elif self.special_objective == 'weighted':
             # if the alpha value is None then raise an error
             if self.imbalance_alpha is None:
@@ -105,7 +105,7 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
             # fit the classfifier
             self.boosting_model = xgb.train(self.para_dict, dtrain,  self.num_round,self.eval_list,
                                             obj=weighted_loss_obj.weighted_binary_cross_entropy, feval=evalerror,
-                                            verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds)
+                                            verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds,evals_result=self.evals_result)
         elif self.special_objective == 'focal':
             # if the gamma value is None then raise an error
             if self.focal_gamma is None:
@@ -115,7 +115,7 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
             # fit the classfifier
             # print(self.para_dict)
             self.boosting_model = xgb.train(self.para_dict, dtrain, self.num_round,self.eval_list,
-                                            obj=focal_loss_obj.focal_binary_object, feval=evalerror, verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds)
+                                            obj=focal_loss_obj.focal_binary_object, feval=evalerror, verbose_eval=False, early_stopping_rounds=self.early_stopping_rounds,evals_result=self.evals_result)
         else:
             raise ValueError(
                 'The input special objective mode not recognized! Could only be \'weighted\' or \'focal\', but got ' + str(
@@ -125,12 +125,11 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
         # matrixilize
         if y is not None:
             try:
-                dtest = xgb.DMatrix(data_x, label=y,weight=sample_weight)
+                dtest = xgb.DMatrix(data_x, label=y)
             except:
                 raise ValueError('Test data invalid!')
         else:
-            dtest = xgb.DMatrix(data_x,weight=sample_weight)
-
+            dtest = xgb.DMatrix(data_x)
         prediction_output = self.boosting_model.predict(dtest)
 
         return prediction_output
@@ -138,27 +137,27 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
     def predict_sigmoid(self, data_x, y=None,sample_weight=None):
         # sigmoid output, for the prob = 1
 
-        raw_output = self.predict(data_x, y,weight=sample_weight)
+        raw_output = self.predict(data_x, y,sample_weight=sample_weight)
         sigmoid_output = 1. / (1. + np.exp(-raw_output))
 
         return sigmoid_output
 
     def predict_determine(self, data_x, y=None,sample_weight=None):
         # deterministic output
-        sigmoid_output = self.predict_sigmoid(data_x, y,weight=sample_weight)
+        sigmoid_output = self.predict_sigmoid(data_x, y,sample_weight=sample_weight)
         prediction_output = np.round(sigmoid_output)
 
         return prediction_output
 
     def predict_two_class(self, data_x, y=None,sample_weight=None):
         # predict the probability of two classes
-        prediction_output = two_class_encoding(self.predict(data_x, y,weight=sample_weight))
+        prediction_output = two_class_encoding(self.predict(data_x, y,sample_weight=sample_weight))
 
         return prediction_output
 
     def score(self, X, y, sample_weight=None):
-        label_pred = self.predict_determine(data_x=X)
-        score_pred = accuracy_score(y_true=y, y_pred=label_pred,weight=sample_weight)
+        label_pred = self.predict_determine(data_x=X,sample_weight=sample_weight)
+        score_pred = accuracy_score(y_true=y, y_pred=label_pred,sample_weight=sample_weight)
 
         return score_pred
 
@@ -166,15 +165,15 @@ class imbalance_xgboost(BaseEstimator, ClassifierMixin):
         prob_pred = two_class_encoding(y_pred)
         label_pred = np.argmax(prob_pred, axis=1)
         if mode == 'accuracy':
-            score_pred = accuracy_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
+            score_pred = accuracy_score(y_true=y_true, y_pred=label_pred,sample_weight=sample_weight)
         elif mode == 'precision':
-            score_pred = precision_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
+            score_pred = precision_score(y_true=y_true, y_pred=label_pred,sample_weight=sample_weight)
         elif mode == 'recall':
-            score_pred = recall_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
+            score_pred = recall_score(y_true=y_true, y_pred=label_pred,sample_weight=sample_weight)
         elif mode == 'f1':
-            score_pred = f1_score(y_true=y_true, y_pred=label_pred,weight=sample_weight)
+            score_pred = f1_score(y_true=y_true, y_pred=label_pred,sample_weight=sample_weight)
         elif mode == 'MCC':
-            score_pred = matthews_corrcoef(y_true=y_true, y_pred=label_pred,weight=sample_weight)
+            score_pred = matthews_corrcoef(y_true=y_true, y_pred=label_pred,sample_weight=sample_weight)
         else:
             raise ValueError('Score function mode unrecognized! Must from one in the list '
                              '[\'accuracy\', \'precision\',\'recall\',\'f1\',\'MCC\']')
